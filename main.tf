@@ -2,9 +2,9 @@ locals {
   token       = file("${path.module}/.token")
   cloud_id    = "b1g7kgb2uen6e59u5iim"
   folder_id   = "b1gl5mbs8d2a6a52kb85"
-  k8s_version = "1.24"
-  sa_name     = "viewer"
-  dns_domain_jenkins = "jtest.trevellinetest.com"
+  k8s_version = "1.27"
+  sa_name     = "admin"
+  dns_domain_jenkins = "jenkins.rand0m.ru"
 
     kubeconfig = <<KUBECONFIG
 apiVersion: v1
@@ -33,6 +33,9 @@ KUBECONFIG
 output "kubeconfig" {
   value = local.kubeconfig
 }
+output "ip_host" {
+  value = "${yandex_vpc_address.addr.external_ipv4_address[0].address} ${local.dns_domain_jenkins}"
+}
 
 terraform {
   required_providers {
@@ -53,7 +56,7 @@ provider "yandex" {
 resource "yandex_kubernetes_cluster" "k8s-zonal" {
   name = "k8s-test-cluster-trevelline"
   description = "Kubernetes test cluster for treveline testjob"
-  network_id = yandex_vpc_network.mynet.id
+  network_id = yandex_vpc_network.mynewnet.id
   master {
     version = local.k8s_version
     zonal {
@@ -61,29 +64,95 @@ resource "yandex_kubernetes_cluster" "k8s-zonal" {
       subnet_id = yandex_vpc_subnet.mysubnet.id
     }
     public_ip = true
-    security_group_ids = [yandex_vpc_security_group.k8s-public-services.id]
   }
   service_account_id      = yandex_iam_service_account.myaccount.id
   node_service_account_id = yandex_iam_service_account.myaccount.id
   depends_on = [
     yandex_resourcemanager_folder_iam_member.k8s-clusters-agent,
     yandex_resourcemanager_folder_iam_member.vpc-public-admin,
-    yandex_resourcemanager_folder_iam_member.images-puller
+    yandex_resourcemanager_folder_iam_member.images-puller,
+    yandex_kms_symmetric_key.kms-key
+
   ]
   kms_provider {
     key_id = yandex_kms_symmetric_key.kms-key.id
   }
 }
 
-resource "yandex_vpc_network" "mynet" {
-  name = "mynet"
+resource "yandex_vpc_network" "mynewnet" {
+  name = "mynewnet"
 }
 
 resource "yandex_vpc_subnet" "mysubnet" {
   v4_cidr_blocks = ["10.1.0.0/16"]
   zone           = "ru-central1-a"
-  network_id     = yandex_vpc_network.mynet.id
-  depends_on = [yandex_vpc_network.mynet]
+  network_id     = yandex_vpc_network.mynewnet.id
+  depends_on = [yandex_vpc_network.mynewnet]
+}
+
+resource "yandex_vpc_security_group" "k8s-public-services" {
+  name        = "k8s-public-services"
+  description = "Правила группы разрешают подключение к сервисам из интернета. Примените правила только для групп узлов."
+  network_id  = yandex_vpc_network.mynewnet.id
+    ingress {
+    protocol          = "TCP"
+    description       = "Правило разрешает проверки доступности с диапазона адресов балансировщика нагрузки. Нужно для работы отказоустойчивого кластера Managed Service for Kubernetes и сервисов балансировщика."
+    predefined_target = "loadbalancer_healthchecks"
+    from_port         = 0
+    to_port           = 65535
+  }
+  ingress {
+    protocol          = "ANY"
+    description       = "Правило разрешает взаимодействие мастер-узел и узел-узел внутри группы безопасности."
+    predefined_target = "self_security_group"
+    from_port         = 0
+    to_port           = 65535
+  }
+  ingress {
+    protocol       = "ANY"
+    description    = "Правило разрешает взаимодействие под-под и сервис-сервис. Укажите подсети вашего кластера Managed Service for Kubernetes и сервисов."
+    v4_cidr_blocks = concat(yandex_vpc_subnet.mysubnet.v4_cidr_blocks)
+    from_port      = 0
+    to_port        = 65535
+  }
+  ingress {
+    protocol       = "ICMP"
+    description    = "Правило разрешает отладочные ICMP-пакеты из внутренних подсетей."
+    v4_cidr_blocks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
+  }
+  ingress {
+    protocol       = "TCP"
+    description    = "Правило разрешает входящий трафик из интернета на диапазон портов NodePort. Добавьте или измените порты на нужные вам."
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    from_port      = 30000
+    to_port        = 32767
+  }
+  egress {
+    protocol       = "ANY"
+    description    = "Правило разрешает весь исходящий трафик. Узлы могут связаться с Yandex Container Registry, Yandex Object Storage, Docker Hub и т. д."
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    from_port      = 0
+    to_port        = 65535
+  }
+}
+
+resource "yandex_vpc_security_group" "k8s-nodes-http-access" {
+  name        = "k8s-nodes-http-access"
+  description = "Правила группы разрешают подключение к узлам кластера по SSH. Примените правила только для групп узлов."
+  network_id  = yandex_vpc_network.mynewnet.id
+
+  ingress {
+    protocol       = "TCP"
+    description    = "Правило разрешает подключение к узлам по http"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    port           = 80
+  }
+  ingress {
+    protocol       = "TCP"
+    description    = "Правило разрешает подключение к узлам по http"
+    v4_cidr_blocks = ["0.0.0.0/0"]
+    port           = 443
+  }
 }
 
 resource "yandex_iam_service_account" "myaccount" {
@@ -119,78 +188,26 @@ resource "yandex_kms_symmetric_key" "kms-key" {
   rotation_period   = "8760h" # 1 год.
 }
 
-resource "yandex_resourcemanager_folder_iam_member" "viewer" {
+resource "yandex_resourcemanager_folder_iam_member" "admin" {
   folder_id = local.folder_id
-  role      = "viewer"
+  role      = "admin"
   member    = "serviceAccount:${yandex_iam_service_account.myaccount.id}"
-}
-
-resource "yandex_vpc_security_group" "k8s-public-services" {
-  name        = "k8s-public-services"
-  description = "Правила группы разрешают подключение к сервисам из интернета. Примените правила только для групп узлов."
-  network_id  = yandex_vpc_network.mynet.id
-  ingress {
-    protocol          = "TCP"
-    description       = "Правило разрешает проверки доступности с диапазона адресов балансировщика нагрузки. Нужно для работы отказоустойчивого кластера Managed Service for Kubernetes и сервисов балансировщика."
-    predefined_target = "loadbalancer_healthchecks"
-    from_port         = 0
-    to_port           = 65535
-  }
-  ingress {
-    protocol          = "ANY"
-    description       = "Правило разрешает взаимодействие мастер-узел и узел-узел внутри группы безопасности."
-    predefined_target = "self_security_group"
-    from_port         = 0
-    to_port           = 65535
-  }
-  ingress {
-    protocol       = "ANY"
-    description    = "Правило разрешает взаимодействие под-под и сервис-сервис. Укажите подсети вашего кластера Managed Service for Kubernetes и сервисов."
-    v4_cidr_blocks = concat(yandex_vpc_subnet.mysubnet.v4_cidr_blocks)
-    from_port      = 0
-    to_port        = 65535
-  }
-  ingress {
-    protocol       = "ICMP"
-    description    = "Правило разрешает отладочные ICMP-пакеты из внутренних подсетей."
-    v4_cidr_blocks = ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]
-  }
-  ingress {
-    protocol       = "TCP"
-    description    = "Правило разрешает входящий трафик из интернета на диапазон портов NodePort. Добавьте или измените порты на нужные вам."
-    v4_cidr_blocks = ["0.0.0.0/0"]
-    from_port      = 30000
-    to_port        = 32767
-  }
-  ingress {
-    protocol       = "TCP"
-    description    = "Правило разрешает входящий трафик из интернета на диапазон портов NodePort. Добавьте или измените порты на нужные вам."
-    v4_cidr_blocks = ["0.0.0.0/0"]
-    from_port      = 443
-    to_port        = 443
-  }
-  egress {
-    protocol       = "ANY"
-    description    = "Правило разрешает весь исходящий трафик. Узлы могут связаться с Yandex Container Registry, Yandex Object Storage, Docker Hub и т. д."
-    v4_cidr_blocks = ["0.0.0.0/0"]
-    from_port      = 0
-    to_port        = 65535
-  }
 }
 
 resource "yandex_dns_zone" "dns_domain" {
   name   = replace(local.dns_domain_jenkins, ".", "-")
   zone   = join("", [local.dns_domain_jenkins, "."])
   public = true
-  private_networks = [yandex_vpc_network.mynet.id]
+  private_networks = [yandex_vpc_network.mynewnet.id]
 }
 
 resource "yandex_vpc_address" "addr" {
   name = "static-ip"
   external_ipv4_address {
-    zone_id = "ru-central1-b"
+    zone_id = "ru-central1-a"
   }
 }
+
 resource "yandex_dns_recordset" "jenkins_dns_domain" {
   zone_id = yandex_dns_zone.dns_domain.id
   name    = join("", [local.dns_domain_jenkins, "."])
@@ -215,6 +232,10 @@ resource "yandex_kubernetes_node_group" "k8s_default_node_group" {
     network_interface {
       nat = true
       subnet_ids = [yandex_vpc_subnet.mysubnet.id]
+      security_group_ids = [
+        yandex_vpc_security_group.k8s-public-services.id,
+        yandex_vpc_security_group.k8s-nodes-http-access.id
+      ]
     }
   }
   scale_policy {

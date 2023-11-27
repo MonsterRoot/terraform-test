@@ -1,8 +1,0 @@
-#cloud-config
-users:
-  - name: mnsr
-    groups: sudo
-    shell: /bin/bash
-    sudo: 'ALL=(ALL) NOPASSWD:ALL'
-    ssh-authorized-keys:
-      - ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDsfgJYzVhwZ+qwRBhUfdXTJsE/EEM0c8eirEXEHxQUl0XF/I8yXd8jDNGukfxtD0NRwZxWZiE4q3QyzUkKiZZbSS9p8bIoqgzXZif+9rkL7/UpuGHox+pzv8wLQXKDTkm5IKZJEfBdwIViUtPpKph8eUMDciJGe1mgICslI6LO9aOEFOMxaTfhIC2Xv7g1f4YUXGTjdrO8MdXxmmw1SQkrQA7h5LzxyjVlg98UQtowCNVxlXklPgaWoFJJGPFVMkiOYF5t2dreQhADJ5oM6O6AknBJmOzj3ryROhfjKcpbMWgLpqrKBKrC6RpuWnDQK4Aka8IhJV1s/dcD5chCKGqdZXlKM9Hw/S4vRKBU5rY8JerKiHc/ee/z+iTa6nsjazqsK1MtGScjCCOxPOhQo+u3Z79GzVqsHPTrsk7z28jazo2KZq5SXC0gtPoI6N2s59eLBCcEc9c9GuQwVBun74uQee4ZkWHg9+EzYX9ZZnhrL4MxUrqwxcEnTQWvmoeogiU=

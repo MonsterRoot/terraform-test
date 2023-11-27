@@ -4,3 +4,6 @@
 terraform.tfstate
 *.backup
 .terraform/*
+ClusterIssuer.yaml
+.email_password
+.password
